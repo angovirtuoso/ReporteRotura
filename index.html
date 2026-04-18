@@ -403,8 +403,8 @@
           <div class="grid g-4">
             <div class="field">
               <label for="folio">Folio</label>
-              <input id="folio" type="text" placeholder="Ej. ROT-2026-001" />
-              <div class="hint">Se genera automáticamente en consecutivo. Puede editarse manualmente si se requiere.</div>
+              <input id="folio" type="text" placeholder="Se genera automáticamente" class="readonly" readonly />
+              <div class="hint">El folio oficial se genera automáticamente al registrar la incidencia.</div>
             </div>
             <div class="field">
               <label for="fechaEvento">Fecha del evento</label>
@@ -722,63 +722,74 @@
     const fieldsForCalc = ["cantidad","ancho","alto","espesor"];
     const dayNames = ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
     let photosData = [];
+    const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxZ0fgI4-BXGrFcEDCdaxDoIV2oPeVoS5OfG1k6SZMHY07yHTWCG5nhpxyGKiCbu03a8g/exec";
 
     function formatNumber(value, decimals=3){
       if (isNaN(value) || value === null) return "";
       return Number(value).toLocaleString("es-MX", {minimumFractionDigits:decimals, maximumFractionDigits:decimals});
     }
 
-    function getFolioYear(){
-      const fecha = $("fechaEvento")?.value;
-      if (fecha && /^\d{4}-\d{2}-\d{2}$/.test(fecha)) return fecha.slice(0,4);
-      return new Date().getFullYear().toString();
-    }
+    
 
-    function padFolio(n){
-      return String(n).padStart(3,"0");
-    }
+    
 
-    function getCounterKey(year){
-      return `prodiesa_rotura_folio_${year}`;
-    }
+    
 
-    function getNextFolioNumber(year){
-      const raw = localStorage.getItem(getCounterKey(year));
-      const n = parseInt(raw || "0", 10);
-      return Number.isFinite(n) && n > 0 ? n + 1 : 1;
-    }
+    
 
-    function buildFolio(year, number){
-      return `ROT-${year}-${padFolio(number)}`;
-    }
+    
 
-    function suggestNextFolio(force=false){
-      const folioEl = $("folio");
-      if(!folioEl) return;
-      if(folioEl.value.trim() && !force) return;
-      const year = getFolioYear();
-      const next = getNextFolioNumber(year);
-      folioEl.value = buildFolio(year, next);
-    }
+    
 
-    function reserveCurrentFolio(){
-      const folio = $("folio").value.trim();
-      const match = /^ROT-(\d{4})-(\d{3,})$/.exec(folio);
-      if(!match) return;
-      const year = match[1];
-      const num = parseInt(match[2], 10);
-      if(!Number.isFinite(num)) return;
-      const key = getCounterKey(year);
-      const current = parseInt(localStorage.getItem(key) || "0", 10) || 0;
-      if(num > current){
-        localStorage.setItem(key, String(num));
-      }
-    }
+    
 
     function formatDateForDisplay(isoDate){
       if(!isoDate) return "";
       const [y,m,d] = isoDate.split("-");
       return `${d}/${m}/${y}`;
+    }
+
+    async function solicitarFolioOficial() {
+      const payload = {
+        fechaEvento: $("fechaEvento").value,
+        horaEvento: $("horaEvento").value,
+        diaSemana: $("diaSemana").value,
+        lugar: $("lugar").value,
+        area: $("area").value,
+        turno: $("turno").value,
+        operador: $("operador").value,
+        prodResponsable: $("prodResponsable").value,
+        calidadResponsable: $("calidadResponsable").value,
+        departamento: $("departamento").value,
+        tipoInventario: $("tipoInventario").value,
+        material: $("material").value,
+        modelo: $("modelo").value,
+        cantidad: $("cantidad").value,
+        unidadCantidad: $("unidadCantidad").value,
+        ancho: $("ancho").value,
+        alto: $("alto").value,
+        espesor: $("espesor").value,
+        m2Totales: $("m2Totales").value,
+        kgTotales: $("kgTotales").value,
+        causa: $("causa").value,
+        descripcion: $("descripcion").value
+      };
+
+      const response = await fetch(APPS_SCRIPT_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "text/plain;charset=utf-8"
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const result = await response.json();
+
+      if (!result.ok) {
+        throw new Error(result.error || "No fue posible registrar la incidencia.");
+      }
+
+      return result.folio;
     }
 
     function getDayName(isoDate){
@@ -925,7 +936,6 @@ function calculate(){
     }
 
     function loadDemo(){
-      $("folio").value = "ROT-2026-001";
       $("fechaEvento").value = new Date().toISOString().slice(0,10);
       $("horaEvento").value = "14:35";
       $("lugar").value = "PLANTA 1";
@@ -970,7 +980,7 @@ function calculate(){
 
       $("fechaEvento").addEventListener("change", () => {
         updateDay();
-        suggestNextFolio(false);
+        
       });
 
       
@@ -978,13 +988,17 @@ function calculate(){
       $("fotos").addEventListener("change", (e) => handlePhotos(e.target.files));
       $("btnClear").addEventListener("click", clearForm);
       $("btnDemo").addEventListener("click", loadDemo);
-      $("btnPdf").addEventListener("click", () => {
-        if(!$("folio").value.trim()){
-          suggestNextFolio(true);
+      $("btnPdf").addEventListener("click", async () => {
+        try {
+          calculate();
+          const folio = await solicitarFolioOficial();
+          $("folio").value = folio;
+          fillPdf();
+          setTimeout(() => window.print(), 150);
+        } catch (error) {
+          alert("Error al registrar la incidencia y generar folio: " + error.message);
+          console.error(error);
         }
-        reserveCurrentFolio();
-        fillPdf();
-        setTimeout(() => window.print(), 150);
       });
 
       const now = new Date();
@@ -992,7 +1006,7 @@ function calculate(){
       $("horaEvento").value = now.toTimeString().slice(0,5);
       updateDay();
       calculate();
-      suggestNextFolio(true);
+      
     });
   </script>
 </body>

@@ -163,6 +163,10 @@
       font-weight:700;
       cursor:pointer;
     }
+    button:disabled{
+      opacity:.7;
+      cursor:not-allowed;
+    }
     .btn-primary{
       background:var(--primary);
       color:#fff;
@@ -404,7 +408,7 @@
             <div class="field">
               <label for="folio">Folio</label>
               <input id="folio" type="text" placeholder="Se genera automáticamente" class="readonly" readonly />
-              <div class="hint">El folio oficial se genera automáticamente al registrar la incidencia.</div>
+              <div class="hint">El folio oficial se genera automáticamente al guardar el registro. La impresión del PDF es un paso independiente.</div>
             </div>
             <div class="field">
               <label for="fechaEvento">Fecha del evento</label>
@@ -569,7 +573,8 @@
         </div>
 
         <div class="buttons">
-          <button class="btn-primary" id="btnPdf">Preparar formato e imprimir a PDF</button>
+          <button class="btn-primary" id="btnSave">Guardar registro</button>
+          <button class="btn-secondary" id="btnPdf">Imprimir PDF</button>
           <button class="btn-secondary" id="btnClear">Limpiar formato</button>
           <button class="btn-danger" id="btnDemo">Cargar ejemplo</button>
         </div>
@@ -723,6 +728,10 @@
     const dayNames = ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
     let photosData = [];
     const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxZ0fgI4-BXGrFcEDCdaxDoIV2oPeVoS5OfG1k6SZMHY07yHTWCG5nhpxyGKiCbu03a8g/exec";
+    let isGeneratingPdf = false;
+    let isSavingRecord = false;
+    let folioAsignadoActual = "";
+    const CACHE_KEY = "prodiesa_rotura_registro_actual";
 
     function formatNumber(value, decimals=3){
       if (isNaN(value) || value === null) return "";
@@ -819,6 +828,11 @@ function calculate(){
 
       $("m2Totales").value = formatNumber(m2Totales, 4);
       $("kgTotales").value = formatNumber(kgTotales, 3);
+    }
+
+    function marcarCambioEnFormulario(){
+      folioAsignadoActual = "";
+      if ($("folio"))
     }
 
     function escapeHtml(str){
@@ -957,6 +971,8 @@ function calculate(){
       $("espesor").value = "3";
       $("causa").value = "Durante el manejo de la lámina en la mesa de corte, se presentó golpe en canto y la pieza se fracturó.";
       $("descripcion").value = "Se detectó rotura de producto durante operación. El material quedó segregado para valoración administrativa y ajuste correspondiente.";
+      folioAsignadoActual = "";
+      if ($("folio"))
       calculate();
     }
 
@@ -984,20 +1000,86 @@ function calculate(){
       });
 
       
-      fieldsForCalc.forEach(id => $(id).addEventListener("input", calculate));
-      $("fotos").addEventListener("change", (e) => handlePhotos(e.target.files));
+      fieldsForCalc.forEach(id => $(id).addEventListener("input", () => {
+        calculate();
+        marcarCambioEnFormulario();
+      }));
+
+      [
+        "fechaEvento","horaEvento","diaSemana","lugar","area","ubicacion","turno",
+        "operador","prodResponsable","calidadResponsable","departamento",
+        "material","modelo","cantidad","unidadCantidad","tipoInventario",
+        "ancho","alto","espesor","causa","descripcion"
+      ].forEach(id => {
+        const el = $(id);
+        if (!el) return;
+        const eventName = (el.tagName === "SELECT" || el.type === "date" || el.type === "time") ? "change" : "input";
+        el.addEventListener(eventName, marcarCambioEnFormulario);
+      });
+
+      $("fotos").addEventListener("change", (e) => {
+        handlePhotos(e.target.files);
+        marcarCambioEnFormulario();
+      });
       $("btnClear").addEventListener("click", clearForm);
       $("btnDemo").addEventListener("click", loadDemo);
-      $("btnPdf").addEventListener("click", async () => {
+      $("btnSave").addEventListener("click", async () => {
+        if (isSavingRecord || isGeneratingPdf) {
+          alert("El proceso de impresión está en curso, por favor espera.");
+          return;
+        }
+
+        const btn = $("btnSave");
         try {
+          isSavingRecord = true;
+          btn.disabled = true;
+          btn.textContent = "Guardando registro...";
+
+          const result = await guardarRegistroSiEsNecesario();
+
+          if (result.reused) {
+            alert("Este registro ya fue guardado previamente. Puedes imprimir el PDF sin generar otro folio.");
+          } else {
+            alert("Registro guardado correctamente con folio " + result.folio + ".");
+          }
+        } catch (error) {
+          alert("Error al guardar el registro: " + error.message);
+          console.error(error);
+        } finally {
+          isSavingRecord = false;
+          btn.disabled = false;
+          btn.textContent = "Guardar registro";
+        }
+      });
+
+      $("btnPdf").addEventListener("click", async () => {
+        if (isSavingRecord || isGeneratingPdf) {
+          alert("El proceso de impresión está en curso, por favor espera.");
+          return;
+        }
+
+        try {
+          isGeneratingPdf = true;
           calculate();
-          const folio = await solicitarFolioOficial();
-          $("folio").value = folio;
+
+          const cache = usarRegistroCacheSiCoincide();
+          if (!cache || !cache.folio) {
+            alert("Primero debes guardar el registro para generar el folio oficial antes de imprimir.");
+            return;
+          }
+
+          folioAsignadoActual = cache.folio;
+          $("folio").value = cache.folio;
+
           fillPdf();
           setTimeout(() => window.print(), 150);
         } catch (error) {
-          alert("Error al registrar la incidencia y generar folio: " + error.message);
+          alert("Error al preparar la impresión: " + error.message);
           console.error(error);
+        } finally {
+          setTimeout(() => {
+            isGeneratingPdf = false;
+          }, 500);
         }
       });
 
